@@ -1,14 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 
-const prisma = new PrismaClient();
-
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<object> }
-) {
+export async function GET() {
   // No projectId needed here
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) return NextResponse.json([], { status: 401 });
@@ -19,10 +14,7 @@ export async function GET(
   return NextResponse.json(projects);
 }
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<object> }
-) {
+export async function POST(req: NextRequest) {
   // No projectId needed here
   const session = await getServerSession(authOptions);
   if (!session?.user?.email)

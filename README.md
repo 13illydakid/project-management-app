@@ -31,6 +31,22 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ## Deploy on Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+This repo is configured for Vercel (App Router + API routes).
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Requirements
+
+- DATABASE_URL: Neon/Vercel Postgres pooled URL
+- NEXTAUTH_SECRET: a strong random string
+- NEXTAUTH_URL: your deployed URL (e.g., https://<project>.vercel.app)
+- Optional: Vercel Blob enabled (used automatically in production for file uploads)
+
+Steps
+
+1. Push to GitHub and import the repo in Vercel
+2. Set env vars above for Production (and Preview if needed)
+3. Run initial migrations locally against the remote DB or via your CI
+4. Deploy
+
+Notes
+
+- Local dev writes uploads to public/uploads; on Vercel, uploads go to Vercel Blob (public URLs) automatically.

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import prisma from "@/lib/prisma";
 import path from "path";
 import fs from "fs/promises";
 import { statSync } from "fs";
+import { put } from "@vercel/blob";
 
-const prisma = new PrismaClient();
 const uploadDir = path.join(process.cwd(), "public", "uploads");
 
 // POST: Upload file to project root directory
@@ -19,12 +19,22 @@ export async function POST(
   if (!file)
     return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
 
-  await fs.mkdir(uploadDir, { recursive: true });
-  const filePath = path.join(uploadDir, file.name);
-  const arrayBuffer = await file.arrayBuffer();
-  await fs.writeFile(filePath, Buffer.from(arrayBuffer));
-
-  const url = `/uploads/${file.name}`;
+  let url: string;
+  if (process.env.VERCEL) {
+    // Upload to Vercel Blob in production
+    const { url: blobUrl } = await put(file.name, file, {
+      access: "public",
+      addRandomSuffix: true,
+    });
+    url = blobUrl;
+  } else {
+    // Local dev: write to public/uploads
+    await fs.mkdir(uploadDir, { recursive: true });
+    const filePath = path.join(uploadDir, file.name);
+    const arrayBuffer = await file.arrayBuffer();
+    await fs.writeFile(filePath, Buffer.from(arrayBuffer));
+    url = `/uploads/${file.name}`;
+  }
   const dbFile = await prisma.file.create({
     data: {
       name: file.name,
@@ -46,11 +56,13 @@ export async function GET(
     where: { projectId, directoryId: null },
   });
   const withMeta = files.map((f) => {
-    const abs = path.join(process.cwd(), "public", f.url.replace(/^\/+/, ""));
     let size: number | null = null;
-    try {
-      size = statSync(abs).size;
-    } catch {}
+    if (!/^https?:\/\//.test(f.url)) {
+      const abs = path.join(process.cwd(), "public", f.url.replace(/^\/+/, ""));
+      try {
+        size = statSync(abs).size;
+      } catch {}
+    }
     const ext = f.name.split(".").pop()?.toLowerCase();
     const mimeMap: Record<string, string> = {
       pdf: "application/pdf",

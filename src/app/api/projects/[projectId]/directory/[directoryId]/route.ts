@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import prisma from "@/lib/prisma";
 import path from "path";
 import { statSync } from "fs";
-
-const prisma = new PrismaClient();
 
 // Get contents of a directory (folders and files)
 export async function GET(

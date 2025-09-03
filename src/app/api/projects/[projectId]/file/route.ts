@@ -22,11 +22,26 @@ export async function POST(
   let url: string;
   if (process.env.VERCEL) {
     // Upload to Vercel Blob in production
-    const { url: blobUrl } = await put(file.name, file, {
-      access: "public",
-      addRandomSuffix: true,
-    });
-    url = blobUrl;
+    try {
+      const { url: blobUrl } = await put(file.name, file, {
+        access: "public",
+        addRandomSuffix: true,
+        token: process.env.BLOB_READ_WRITE_TOKEN,
+      });
+      url = blobUrl;
+    } catch (err: unknown) {
+      const e = err as { message?: string } | undefined;
+      // Helpful message if the Blob integration/token is missing
+      const message = e?.message || "Upload failed. Check Blob configuration.";
+      return NextResponse.json(
+        {
+          error:
+            "Vercel Blob upload failed. Ensure the Vercel Blob integration is enabled for this project OR set BLOB_READ_WRITE_TOKEN.",
+          details: message,
+        },
+        { status: 500 }
+      );
+    }
   } else {
     // Local dev: write to public/uploads
     await fs.mkdir(uploadDir, { recursive: true });

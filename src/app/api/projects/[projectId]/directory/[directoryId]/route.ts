@@ -55,7 +55,6 @@ export async function DELETE(
   await prisma.directory.delete({ where: { id: directoryId } });
   return NextResponse.json({ success: true });
 }
-
 // Update directory: rename or set note
 export async function PUT(
   req: NextRequest,
@@ -63,9 +62,39 @@ export async function PUT(
 ) {
   const { directoryId } = await params;
   const body = await req.json();
-  const data: { name?: string; note?: string | null } = {};
+  const data: {
+    name?: string;
+    note?: string | null;
+    parentId?: string | null;
+  } = {};
   if (typeof body.name === "string") data.name = body.name;
-  if ("note" in body) data.note = body.note;
+  if ("note" in body) data.note = body.note as string | null;
+  if ("parentId" in body) {
+    const targetParentId = (body.parentId as string | null) ?? null;
+    if (targetParentId) {
+      if (targetParentId === directoryId) {
+        return NextResponse.json(
+          { error: "Cannot move a folder into itself." },
+          { status: 400 }
+        );
+      }
+      let cur: string | null = targetParentId;
+      for (let i = 0; i < 256 && cur; i++) {
+        if (cur === directoryId) {
+          return NextResponse.json(
+            { error: "Cannot move a folder into its own descendant." },
+            { status: 400 }
+          );
+        }
+        const parent = (await prisma.directory.findUnique({
+          where: { id: cur },
+          select: { parentId: true },
+        })) as { parentId: string | null } | null;
+        cur = parent?.parentId ?? null;
+      }
+    }
+    data.parentId = targetParentId;
+  }
   const dir = await prisma.directory.update({
     where: { id: directoryId },
     data,

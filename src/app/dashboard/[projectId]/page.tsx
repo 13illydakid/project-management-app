@@ -78,7 +78,10 @@ type ApiFile = {
   mimeType?: string | null;
 };
 
-type ExplorerSelectItem = ExplorerItem & { dropFileId?: string };
+type ExplorerSelectItem = ExplorerItem & {
+  dropFileId?: string;
+  dropDirId?: string;
+};
 type Project = { id: string; name: string };
 type Task = {
   id: string;
@@ -120,6 +123,7 @@ function ExplorerColumn({
   onNoteIconClick,
 }: ExplorerColumnProps) {
   const [openFolders, setOpenFolders] = useState<{ [id: string]: boolean }>({});
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   const handleToggle = (item: ExplorerItem) => {
     if (item.type !== "folder") return;
@@ -137,31 +141,81 @@ function ExplorerColumn({
                 className={`cursor-pointer px-3 py-2 rounded-lg flex items-center justify-between transition border relative ${
                   selectedId === item.id
                     ? "bg-white/20 border-white/40"
-                    : "hover:bg-white/10 border-white/10"
+                    : `hover:bg-white/10 border-white/10 ${
+                        dragOverId === item.id
+                          ? "ring-2 ring-cyan-400/60 border-cyan-300/60 bg-white/10"
+                          : ""
+                      }`
                 }`}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelect(item);
                 }}
-                draggable={type === "file"}
-                onDragStart={
-                  type === "file"
-                    ? (e) => e.dataTransfer.setData("fileId", item.id)
-                    : undefined
-                }
+                draggable={item.type === "file" || item.type === "folder"}
+                onDragStart={(e) => {
+                  if (item.type === "file") {
+                    e.dataTransfer.setData("fileId", item.id);
+                  } else if (item.type === "folder") {
+                    e.dataTransfer.setData("dirId", item.id);
+                  }
+                }}
                 onDragOver={
-                  type === "folder" ? (e) => e.preventDefault() : undefined
+                  item.type === "folder" ? (e) => e.preventDefault() : undefined
                 }
-                onDrop={
-                  type === "folder"
+                onDragEnter={
+                  item.type === "folder"
                     ? (e) => {
                         e.preventDefault();
+                        setDragOverId(item.id);
+                      }
+                    : undefined
+                }
+                onDragLeave={
+                  item.type === "folder"
+                    ? (e) => {
+                        e.preventDefault();
+                        // Only clear if leaving this item
+                        setDragOverId((cur) => (cur === item.id ? null : cur));
+                      }
+                    : undefined
+                }
+                onDrop={
+                  item.type === "folder"
+                    ? async (e) => {
+                        e.preventDefault();
+                        setDragOverId(null);
+                        // Case 1: OS files dropped
+                        const fl = e.dataTransfer.files;
+                        if (fl && fl.length > 0) {
+                          for (const f of Array.from(fl)) {
+                            const fd = new FormData();
+                            fd.append("file", f);
+                            fd.append("directoryId", item.id);
+                            await fetch(`/api/projects/${projectId}/file`, {
+                              method: "POST",
+                              body: fd,
+                            });
+                          }
+                          // Refresh this folder view
+                          onSelect(item);
+                          return;
+                        }
+                        // Case 2: Internal drag move (file or folder)
                         const fileId = e.dataTransfer.getData("fileId");
+                        const dirId = e.dataTransfer.getData("dirId");
                         if (fileId) {
                           onSelect({
                             ...(item as ExplorerItem),
                             dropFileId: fileId,
                           } as ExplorerSelectItem);
+                          return;
+                        }
+                        if (dirId && dirId !== item.id) {
+                          onSelect({
+                            ...(item as ExplorerItem),
+                            dropDirId: dirId,
+                          } as ExplorerSelectItem);
+                          return;
                         }
                       }
                     : undefined
@@ -591,6 +645,17 @@ export default function ProjectPage({ params }: ProjectPageProps) {
   const [showNote, setShowNote] = useState<boolean>(false);
   const [noteTarget, setNoteTarget] = useState<ExplorerItem | null>(null);
   const [noteDraft, setNoteDraft] = useState<string>("");
+  // lightweight toast notifications
+  const [toast, setToast] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+  const notifyTid = React.useRef<number | null>(null);
+  const notify = (type: "success" | "error", text: string) => {
+    setToast({ type, text });
+    if (notifyTid.current != null) window.clearTimeout(notifyTid.current);
+    notifyTid.current = window.setTimeout(() => setToast(null), 2500);
+  };
   // dynamic column widths (in pixels), one per column
   const [colWidths, setColWidths] = useState<number[]>([]);
   const dragRef = React.useRef<{
@@ -727,13 +792,29 @@ export default function ProjectPage({ params }: ProjectPageProps) {
 
     // Drag-and-drop move support: if a fileId is present, move it into this folder first
     const maybeDrop = (item as ExplorerSelectItem).dropFileId;
+    const maybeDropDir = (item as ExplorerSelectItem).dropDirId;
     if (isFolder(item)) {
       if (maybeDrop) {
-        await fetch(`/api/projects/${projectId}/file/${maybeDrop}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ directoryId: item.id }),
-        });
+        const res = await fetch(
+          `/api/projects/${projectId}/file/${maybeDrop}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ directoryId: item.id }),
+          }
+        );
+        if (!res.ok) notify("error", "Move failed");
+      }
+      if (maybeDropDir) {
+        const res = await fetch(
+          `/api/projects/${projectId}/directory/${maybeDropDir}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ parentId: item.id }),
+          }
+        );
+        if (!res.ok) notify("error", "Move failed");
       }
       // Fetch children and files for the selected folder
       const res = await fetch(
@@ -828,11 +909,9 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     if (!file) return;
     const formData = new FormData();
     formData.append("file", file);
-    // If a folder is selected, upload into it
-    const targetDirId =
-      selected.length && selected[selected.length - 1].type === "folder"
-        ? selected[selected.length - 1].id
-        : undefined;
+    // If any folder is selected, upload into the deepest selected folder
+    const lastFolder = [...selected].reverse().find((s) => s.type === "folder");
+    const targetDirId = lastFolder?.id;
     if (targetDirId) formData.append("directoryId", targetDirId);
     await fetch(`/api/projects/${projectId}/file`, {
       method: "POST",
@@ -840,33 +919,57 @@ export default function ProjectPage({ params }: ProjectPageProps) {
     });
     setUploading(false);
     setShowUpload(false);
-    // reload root
-    fetch(`/api/projects/${projectId}/directory`)
-      .then((res) => res.json())
-      .then((rootDirs) => {
-        fetch(`/api/projects/${projectId}/file`)
-          .then((res) => res.json())
-          .then((rootFiles) => {
-            const dirs: ApiDir[] = Array.isArray(rootDirs)
-              ? (rootDirs as ApiDir[])
-              : [];
-            const filesApi: ApiFile[] = Array.isArray(rootFiles)
-              ? (rootFiles as ApiFile[])
-              : [];
-            const dirItems: ExplorerItem[] = dirs.map((d) => ({
-              id: d.id,
-              name: d.name,
-              type: "folder",
-            }));
-            const fileItems: ExplorerItem[] = filesApi.map((f) => ({
-              id: f.id,
-              name: f.name,
-              type: f.url?.match(/\.(jpg|jpeg|png|gif)$/i) ? "photo" : "file",
-              url: f.url,
-            }));
-            setColumns([[...dirItems, ...fileItems]]);
-          });
-      });
+    notify("success", targetDirId ? "Uploaded to folder" : "Uploaded to root");
+    // Refresh target view: if uploaded into a folder, open that folder; else reload root
+    if (targetDirId) {
+      const res = await fetch(
+        `/api/projects/${projectId}/directory/${targetDirId}`
+      );
+      const dir = await res.json();
+      const children: ExplorerItem[] = (
+        Array.isArray(dir.children) ? (dir.children as ApiDir[]) : []
+      ).map((d) => ({ id: d.id, name: d.name, type: "folder" }));
+      const files: ExplorerItem[] = (
+        Array.isArray(dir.files) ? (dir.files as ApiFile[]) : []
+      ).map((f) => ({
+        id: f.id,
+        name: f.name,
+        type: f.url?.match(/\.(jpg|jpeg|png|gif)$/i) ? "photo" : "file",
+        url: f.url,
+      }));
+      // find the column index of this folder (if already open), else append
+      const idx = selected.findIndex((s) => s.id === targetDirId);
+      const baseCols = idx >= 0 ? columns.slice(0, idx + 1) : columns;
+      setColumns([...baseCols, [...children, ...files]]);
+    } else {
+      // reload root
+      fetch(`/api/projects/${projectId}/directory`)
+        .then((res) => res.json())
+        .then((rootDirs) => {
+          fetch(`/api/projects/${projectId}/file`)
+            .then((res) => res.json())
+            .then((rootFiles) => {
+              const dirs: ApiDir[] = Array.isArray(rootDirs)
+                ? (rootDirs as ApiDir[])
+                : [];
+              const filesApi: ApiFile[] = Array.isArray(rootFiles)
+                ? (rootFiles as ApiFile[])
+                : [];
+              const dirItems: ExplorerItem[] = dirs.map((d) => ({
+                id: d.id,
+                name: d.name,
+                type: "folder",
+              }));
+              const fileItems: ExplorerItem[] = filesApi.map((f) => ({
+                id: f.id,
+                name: f.name,
+                type: f.url?.match(/\.(jpg|jpeg|png|gif)$/i) ? "photo" : "file",
+                url: f.url,
+              }));
+              setColumns([[...dirItems, ...fileItems]]);
+            });
+        });
+    }
   };
 
   // Delete logic
@@ -1251,7 +1354,68 @@ export default function ProjectPage({ params }: ProjectPageProps) {
               {getPath(selected)}
             </div>
             {viewMode === "columns" && (
-              <div className="w-full overflow-auto">
+              <div
+                className="w-full overflow-auto"
+                onDragOver={(e) => {
+                  // allow dropping to root when over first column background
+                  e.preventDefault();
+                }}
+                onDrop={async (e) => {
+                  // Drop to root if OS files and not handled by an item
+                  const files = e.dataTransfer?.files;
+                  if (files && files.length > 0) {
+                    for (const f of Array.from(files)) {
+                      const fd = new FormData();
+                      fd.append("file", f);
+                      const res = await fetch(
+                        `/api/projects/${projectId}/file`,
+                        {
+                          method: "POST",
+                          body: fd,
+                        }
+                      );
+                      if (!res.ok) notify("error", `Upload failed: ${f.name}`);
+                    }
+                    // reload root
+                    fetch(`/api/projects/${projectId}/directory`)
+                      .then((res) => res.json())
+                      .then((rootDirs) => {
+                        fetch(`/api/projects/${projectId}/file`)
+                          .then((res) => res.json())
+                          .then((rootFiles) => {
+                            const dirs: ApiDir[] = Array.isArray(rootDirs)
+                              ? (rootDirs as ApiDir[])
+                              : [];
+                            const filesApi: ApiFile[] = Array.isArray(rootFiles)
+                              ? (rootFiles as ApiFile[])
+                              : [];
+                            const dirItems: ExplorerItem[] = dirs.map((d) => ({
+                              id: d.id,
+                              name: d.name,
+                              type: "folder",
+                              note: d.note ?? null,
+                            }));
+                            const fileItems: ExplorerItem[] = filesApi.map(
+                              (f) => ({
+                                id: f.id,
+                                name: f.name,
+                                type: f.url?.match(/\.(jpg|jpeg|png|gif)$/i)
+                                  ? "photo"
+                                  : "file",
+                                url: f.url,
+                                note: f.note ?? null,
+                                uploadedAt: f.createdAt ?? undefined,
+                                size: f.size ?? null,
+                                mimeType: f.mimeType ?? null,
+                              })
+                            );
+                            setColumns([[...dirItems, ...fileItems]]);
+                            notify("success", "Uploaded to root");
+                          });
+                      });
+                  }
+                }}
+              >
                 <div className="flex justify-center">
                   <div className="flex gap-2">
                     {columns.map((items, idx) => (
@@ -1575,6 +1739,20 @@ export default function ProjectPage({ params }: ProjectPageProps) {
               </div>
             </div>
           </aside>
+        </div>
+      )}
+      {/* Toast */}
+      {toast && (
+        <div className="fixed bottom-4 right-4 z-[60]">
+          <div
+            className={`px-4 py-3 rounded-lg shadow-lg text-sm border ${
+              toast.type === "success"
+                ? "bg-emerald-600/90 border-emerald-400 text-white"
+                : "bg-red-600/90 border-red-400 text-white"
+            }`}
+          >
+            {toast.text}
+          </div>
         </div>
       )}
       {/* Delete Confirmation Modal */}

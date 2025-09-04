@@ -147,6 +147,3 @@ Uploads
 - File previews not rendering in production
   - Ensure the app is deployed on Vercel (Blob integration available) and your uploaded files return public URLs.
 
-## License
-
-MIT (or your preferred license)
